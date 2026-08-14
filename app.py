@@ -14,10 +14,17 @@ uploaded_file = st.file_uploader(
     "Apni Video File Select Karein (.mp4, .mkv)", type=["mp4", "mkv", "mov"]
 )
 
-stream_key_input = st.text_input(
-    "YouTube Stream Key (Ya poora RTMP URL + Key)",
+# Alag Alag Inputs: Server URL aur Stream Key
+rtmp_url = st.text_input(
+    "Stream URL (Server URL)",
+    value="rtmp://a.rtmp.youtube.com/live2",
+    placeholder="rtmp://a.rtmp.youtube.com/live2",
+)
+
+stream_key = st.text_input(
+    "Stream Key",
     type="password",
-    placeholder="huvh-c00p-90v2-c5wp-cqz2 ya rtmp://...",
+    placeholder="xxxx-xxxx-xxxx-xxxx-xxxx",
 )
 
 if "process" not in st.session_state:
@@ -27,26 +34,24 @@ col1, col2 = st.columns(2)
 
 with col1:
   if st.button("Start Streaming 🚀", type="primary"):
-    if not uploaded_file or not stream_key_input:
-      st.error("Pehle Video Upload karein aur Stream Key daalein!")
+    if not uploaded_file or not stream_key or not rtmp_url:
+      st.error("Tamam fields fill karna aur Video upload karna zaroori hai!")
     else:
-      # Stream Key Auto Formatting (Agar rtmp na ho to auto add kar do)
-      clean_key = stream_key_input.strip()
-      if not clean_key.startswith("rtmp"):
-        full_stream_url = f"rtmp://a.rtmp.youtube.com/live2/{clean_key}"
-      else:
-        full_stream_url = clean_key
+      # URL aur Key ko safai se combine karna
+      base_url = rtmp_url.strip().rstrip("/")
+      clean_key = stream_key.strip()
+      full_stream_url = f"{base_url}/{clean_key}"
 
       # Video file save in server
       video_path = "temp_video.mp4"
       with open(video_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-      # Stop active process
+      # Purani stream roknay ke liye
       if st.session_state.process:
         st.session_state.process.kill()
 
-      # FFmpeg command to stream live on YouTube
+      # FFmpeg command
       cmd = f'ffmpeg -re -stream_loop -1 -i "{video_path}" -c:v libx264 -preset ultrafast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 50 -c:a aac -b:a 128k -ar 44100 -f flv "{full_stream_url}"'
 
       st.session_state.process = subprocess.Popen(cmd, shell=True)
