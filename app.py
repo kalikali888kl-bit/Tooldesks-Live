@@ -1,6 +1,5 @@
 import json
 import os
-import signal
 import subprocess
 import time
 from datetime import datetime, timedelta
@@ -9,40 +8,34 @@ import streamlit as st
 
 # Page Configuration
 st.set_page_config(
-    page_title="24/7 Advanced Multi-Streamer", page_icon="🎥", layout="wide"
+    page_title="24/7 Live Streamer Pro", page_icon="🎥", layout="wide"
 )
 
 # Folder Paths
 UPLOAD_DIR = "uploads"
-STREAMS_DIR = "streams"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(STREAMS_DIR, exist_ok=True)
+INFO_FILE = "stream_info.json"
+PLAYLIST_FILE = "playlist.txt"
 
-# CSS for Animations & Styling
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# Styling
 st.markdown(
     """
     <style>
     @keyframes pulse {
         0% { transform: scale(1); opacity: 1; }
-        50% { transform: scale(1.03); opacity: 0.8; }
+        50% { transform: scale(1.02); opacity: 0.8; }
         100% { transform: scale(1); opacity: 1; }
     }
-    .live-badge {
-        background-color: #ff4b4b;
-        color: white;
-        padding: 6px 14px;
-        border-radius: 20px;
-        font-weight: bold;
-        display: inline-block;
-        animation: pulse 2s infinite;
-    }
     .time-card {
-        background: #1f2937;
+        background: #111827;
         padding: 15px;
         border-radius: 10px;
         border-left: 5px solid #10b981;
-        margin-bottom: 10px;
+        margin-top: 10px;
+        margin-bottom: 15px;
         color: white;
+        animation: pulse 3s infinite;
     }
     </style>
 """,
@@ -50,7 +43,61 @@ st.markdown(
 )
 
 
-# --- HELPER FUNCTIONS ---
+# --- SYSTEM HELPER FUNCTIONS ---
+def is_ffmpeg_running():
+  """Check directly via Linux pgrep if FFmpeg is actively streaming."""
+  try:
+    output = subprocess.check_output(["pgrep", "-f", "ffmpeg"]).decode().strip()
+    return bool(output)
+  except Exception:
+    return False
+
+
+def get_ffmpeg_state():
+  """Check if FFmpeg process is Running, Paused, or Stopped."""
+  try:
+    pid = subprocess.check_output(["pgrep", "-f", "ffmpeg"]).decode().split()[0]
+    with open(f"/proc/{pid}/status", "r") as f:
+      for line in f:
+        if line.startswith("State:"):
+          state = line.split(":")[1].strip().split()[0]
+          if state in ["T", "t"]:
+            return "Paused ⏸"
+          return "Running 🟢"
+  except Exception:
+    pass
+  return "Running 🟢" if is_ffmpeg_running() else "Stopped ⏹"
+
+
+def stop_all_ffmpeg():
+  """Kill all running ffmpeg processes."""
+  try:
+    subprocess.run(["pkill", "-9", "-f", "ffmpeg"])
+    if os.path.exists(INFO_FILE):
+      os.remove(INFO_FILE)
+    if os.path.exists(PLAYLIST_FILE):
+      os.remove(PLAYLIST_FILE)
+    return True
+  except Exception:
+    return False
+
+
+def pause_ffmpeg():
+  try:
+    subprocess.run(["pkill", "-STOP", "-f", "ffmpeg"])
+    return True
+  except Exception:
+    return False
+
+
+def resume_ffmpeg():
+  try:
+    subprocess.run(["pkill", "-CONT", "-f", "ffmpeg"])
+    return True
+  except Exception:
+    return False
+
+
 def get_video_duration(file_path):
   """Get video duration in seconds using ffprobe."""
   try:
@@ -79,58 +126,39 @@ def format_seconds(seconds):
   return f"{m:02d}m {s:02d}s"
 
 
-def get_pid_status(pid):
-  """Check Linux process state (Running / Paused / Stopped)."""
-  try:
-    os.kill(pid, 0)
+def save_stream_info(data):
+  with open(INFO_FILE, "w") as f:
+    json.dump(data, f)
+
+
+def load_stream_info():
+  if os.path.exists(INFO_FILE):
     try:
-      with open(f"/proc/{pid}/status", "r") as f:
-        for line in f:
-          if line.startswith("State:"):
-            state = line.split(":")[1].strip().split()[0]
-            if state in ["T", "t"]:
-              return "Paused ⏸"
-            return "Running 🟢"
+      with open(INFO_FILE, "r") as f:
+        return json.load(f)
     except Exception:
-      return "Running 🟢"
-  except (OSError, ProcessLookupError):
-    return "Stopped ⏹"
+      pass
+  return None
 
 
-def get_active_streams():
-  """List all saved stream metadata and update statuses."""
-  streams = []
-  for file in os.listdir(STREAMS_DIR):
-    if file.endswith(".json"):
-      path = os.path.join(STREAMS_DIR, file)
-      try:
-        with open(path, "r") as f:
-          data = json.load(f)
-          data["status"] = get_pid_status(data["pid"])
-          streams.append(data)
-      except Exception:
-        pass
-  return streams
-
-
-# --- MAIN APP UI ---
-st.title("🎥 24/7 Advanced Multi-Streamer Dashboard")
+# --- MAIN HEADER ---
+st.title("🎥 24/7 Live Streamer Pro Dashboard")
 
 tabs = st.tabs([
-    "🚀 Start New Stream",
-    "📡 Active Streams Control",
+    "🚀 Stream Controls & Setup",
+    "📊 Real-Time Live Tracker",
     "📁 Uploaded Videos Library",
 ])
 
 # ---------------------------------------------------------
-# TAB 1: START NEW STREAM
+# TAB 1: STREAM CONTROLS & SETUP
 # ---------------------------------------------------------
 with tabs[0]:
-  st.subheader("1️⃣ Videos Select Karein (Limit: Up to 10 Videos)")
+  st.subheader("1️⃣ Videos Upload & Multi-Select (Up to 10 Videos)")
 
-  # Option 1: File Uploader
+  # File Uploader
   new_uploads = st.file_uploader(
-      "Nayi Videos Upload Karein",
+      "Nayi Video Files Upload Karein",
       type=["mp4", "mkv", "mov"],
       accept_multiple_files=True,
   )
@@ -141,9 +169,8 @@ with tabs[0]:
       if not os.path.exists(save_path):
         with open(save_path, "wb") as f:
           f.write(uploaded_file.getbuffer())
-    st.success(f"{len(new_uploads)} video(s) Upload Library mein save ho gayi!")
+    st.success("Uploaded files library mein save ho gayi hain!")
 
-  # Option 2: Select from Library
   existing_files = [
       f for f in os.listdir(UPLOAD_DIR) if f.endswith((".mp4", ".mkv", ".mov"))
   ]
@@ -158,7 +185,7 @@ with tabs[0]:
     )
 
     if selected_videos:
-      st.subheader("2️⃣ Videos Loop Numbers Set Karein")
+      st.subheader("2️⃣ Videos Loop Configurator")
 
       total_calculated_seconds = 0
       video_loop_config = []
@@ -178,7 +205,7 @@ with tabs[0]:
               min_value=1,
               max_value=100,
               value=1,
-              key=f"loop_{idx}",
+              key=f"loop_cfg_{idx}",
           )
 
           vid_total_time = duration * loop_count
@@ -194,25 +221,24 @@ with tabs[0]:
               "duration": duration,
           })
 
-      # Live Timing & Calculation Panel
-      st.subheader("⏱ Total Stream Calculation & Timing")
-
+      # Live Timing Info
+      st.subheader("⏱ Timing Calculation")
       now = datetime.now()
       estimated_end = now + timedelta(seconds=total_calculated_seconds)
 
       st.markdown(
           f"""
         <div class="time-card">
-            <h4>⏳ Total Stream Duration: <b>{format_seconds(total_calculated_seconds)}</b></h4>
-            <p style="margin: 5px 0;">🚀 <b>Start Time (Abhi):</b> {now.strftime('%I:%M:%S %p (%d-%b-%Y)')}</p>
-            <p style="margin: 5px 0;">🏁 <b>Estimated End Time:</b> {estimated_end.strftime('%I:%M:%S %p (%d-%b-%Y)')}</p>
+            <h4>⏳ Sequence Total Duration: <b>{format_seconds(total_calculated_seconds)}</b></h4>
+            <p style="margin: 3px 0;">🚀 <b>Start Time:</b> {now.strftime('%I:%M:%S %p (%d-%b-%Y)')}</p>
+            <p style="margin: 3px 0;">🏁 <b>Calculated End Time:</b> {estimated_end.strftime('%I:%M:%S %p (%d-%b-%Y)')}</p>
         </div>
         """,
           unsafe_allow_html=True,
       )
 
       # Server Settings
-      st.subheader("3️⃣ Streaming Server Settings")
+      st.subheader("3️⃣ Target Server Details")
       rtmp_url = st.text_input(
           "Stream URL (Server URL)",
           value="rtmp://a.rtmp.youtube.com/live2",
@@ -223,127 +249,129 @@ with tabs[0]:
           placeholder="xxxx-xxxx-xxxx-xxxx-xxxx",
       )
 
-      continuous_loop = st.checkbox(
-          "🔄 Loop Entire Playlist Continuously (24/7 Mode)", value=True
-      )
+      # Stream Controls Buttons
+      c_start, c_pause, c_resume, c_stop = st.columns(4)
 
-      if st.button("Start Live Stream 🚀", type="primary"):
-        if not stream_key or not rtmp_url:
-          st.error("Stream Key aur URL fill karna lazmi hai!")
-        else:
-          stream_id = f"stream_{int(time.time())}"
-          concat_file_path = os.path.join(
-              STREAMS_DIR, f"concat_{stream_id}.txt"
-          )
+      with c_start:
+        if st.button("Start Streaming 🚀", type="primary"):
+          if not stream_key or not rtmp_url:
+            st.error("Stream Key aur URL fill karna lazmi hai!")
+          else:
+            stop_all_ffmpeg()
 
-          # Build Concat Text File
-          with open(concat_file_path, "w") as f:
-            for item in video_loop_config:
-              abs_path = os.path.abspath(item["path"])
-              for _ in range(item["loops"]):
-                f.write(f"file '{abs_path}'\n")
+            # Create Playlist Text File
+            with open(PLAYLIST_FILE, "w") as f:
+              for item in video_loop_config:
+                abs_path = os.path.abspath(item["path"])
+                for _ in range(item["loops"]):
+                  f.write(f"file '{abs_path}'\n")
 
-          base_url = rtmp_url.strip().rstrip("/")
-          clean_key = stream_key.strip()
-          full_stream_url = f"{base_url}/{clean_key}"
+            base_url = rtmp_url.strip().rstrip("/")
+            clean_key = stream_key.strip()
+            full_stream_url = f"{base_url}/{clean_key}"
 
-          # Build FFmpeg Command
-          loop_flag = "-stream_loop -1" if continuous_loop else ""
-          cmd = f'ffmpeg {loop_flag} -f concat -safe 0 -i "{concat_file_path}" -c:v libx264 -preset ultrafast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 50 -c:a aac -b:a 128k -ar 44100 -f flv "{full_stream_url}"'
+            cmd = f'ffmpeg -re -stream_loop -1 -f concat -safe 0 -i "{PLAYLIST_FILE}" -c:v libx264 -preset ultrafast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 50 -c:a aac -b:a 128k -ar 44100 -f flv "{full_stream_url}"'
 
-          process = subprocess.Popen(cmd, shell=True)
+            subprocess.Popen(cmd, shell=True)
 
-          # Save Metadata
-          stream_info = {
-              "id": stream_id,
-              "pid": process.pid,
-              "start_time": now.strftime("%I:%M %p (%d-%b-%Y)"),
-              "start_epoch": time.time(),
-              "end_time": estimated_end.strftime("%I:%M %p (%d-%b-%Y)"),
-              "total_duration": total_calculated_seconds,
-              "rtmp_url": base_url,
-              "videos_count": len(video_loop_config),
-              "concat_file": concat_file_path,
-          }
+            save_stream_info({
+                "videos": [v["name"] for v in video_loop_config],
+                "main_file": video_loop_config[0]["path"],
+                "start_epoch": time.time(),
+                "start_time_str": now.strftime("%I:%M %p (%d-%b-%Y)"),
+                "end_time_str": estimated_end.strftime("%I:%M %p (%d-%b-%Y)"),
+                "total_duration": total_calculated_seconds,
+                "rtmp_url": base_url,
+            })
 
-          with open(
-              os.path.join(STREAMS_DIR, f"{stream_id}.json"), "w"
-          ) as info_f:
-            json.dump(stream_info, info_f)
+            st.success("🚀 Stream YouTube par bhej di gayi hai!")
+            st.rerun()
 
-          st.success("🚀 Nayi Live Stream Successfully Start Ho Gayi!")
+      with c_pause:
+        if st.button("Pause Stream ⏸"):
+          pause_ffmpeg()
+          st.warning("Stream Pause kar di gayi hai.")
+          st.rerun()
+
+      with c_resume:
+        if st.button("Resume Stream ▶"):
+          resume_ffmpeg()
+          st.success("Stream Resume ho gayi hai.")
+          st.rerun()
+
+      with c_stop:
+        if st.button("Stop Stream 🛑"):
+          stop_all_ffmpeg()
+          st.error("Stream Stop kar di gayi hai.")
           st.rerun()
 
 # ---------------------------------------------------------
-# TAB 2: ACTIVE STREAMS CONTROL
+# TAB 2: REAL-TIME LIVE TRACKER (RESTORED DASHBOARD)
 # ---------------------------------------------------------
 with tabs[1]:
-  st.subheader("📡 Purani Aur Active Live Streams List")
+  st.subheader("📊 Live Streaming Real-Time Status & Synced Player")
 
-  active_streams = get_active_streams()
+  if is_ffmpeg_running():
+    state = get_ffmpeg_state()
+    st.success(f"🟢 Live Status: Stream Active Hai! ({state})")
 
-  if not active_streams:
-    st.info("Filhal koi stream active nahi hai.")
+    info = load_stream_info()
+
+    if info:
+      start_epoch = info.get("start_epoch", time.time())
+      duration = info.get("total_duration", 1.0)
+      elapsed_total = time.time() - start_epoch
+
+      loop_count = int(elapsed_total // duration) + 1 if duration > 0 else 1
+      current_pos = elapsed_total % duration if duration > 0 else 0
+      progress_ratio = (
+          min(1.0, max(0.0, current_pos / duration)) if duration > 0 else 0.0
+      )
+
+      # 1. Live Synced Video Player
+      main_video_file = info.get("main_file", "")
+      if main_video_file and os.path.exists(main_video_file):
+        st.write(
+            f"**📺 Live Synced Player (Position:"
+            f" {format_seconds(current_pos)}):**"
+        )
+        st.video(
+            main_video_file,
+            start_time=int(current_pos),
+            autoplay=True,
+            muted=True,
+        )
+
+      # 2. Real-Time Metrics
+      m1, m2, m3, m4 = st.columns(4)
+      m1.metric("🔁 Sequence Loop Count", f"{loop_count} baar")
+      m2.metric(
+          "⏱ Position / Duration",
+          f"{format_seconds(current_pos)} / {format_seconds(duration)}",
+      )
+      m3.metric("⏳ Total Stream Time", format_seconds(elapsed_total))
+      m4.metric("🏁 Target End Time", info.get("end_time_str", "N/A"))
+
+      st.write(f"**Current Sequence Progress:** {int(progress_ratio * 100)}%")
+      st.progress(progress_ratio)
+
+      # Details
+      st.markdown(
+          f"**🎬 Selected Videos:** `{', '.join(info.get('videos', []))}`"
+      )
+      st.markdown(f"**⏰ Stream Started At:** `{info.get('start_time_str')}`")
+      st.markdown(f"**📡 Target Server:** `{info.get('rtmp_url')}`")
+
+      if st.button("🔄 Sync & Refresh Tracker"):
+        st.rerun()
   else:
-    for s in active_streams:
-      with st.container():
-        st.markdown(
-            f"### 🔴 Stream ID: `{s['id']}` | Status: **{s['status']}**"
-        )
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("⏰ Start Time", s["start_time"])
-        c2.metric("🏁 Expected End Time", s["end_time"])
-        c3.metric(
-            "⏳ Sequence Duration", format_seconds(s["total_duration"])
-        )
-        c4.metric("🎥 Videos Included", f"{s['videos_count']} Videos")
-
-        # Control Buttons
-        b_col1, b_col2, b_col3 = st.columns(3)
-
-        pid = s["pid"]
-
-        with b_col1:
-          if st.button("Pause ⏸", key=f"pause_{s['id']}"):
-            try:
-              os.kill(pid, signal.SIGSTOP)
-              st.warning("Stream Pause kar di gayi hai.")
-              st.rerun()
-            except Exception as e:
-              st.error(f"Error: {e}")
-
-        with b_col2:
-          if st.button("Resume ▶", key=f"resume_{s['id']}"):
-            try:
-              os.kill(pid, signal.SIGCONT)
-              st.success("Stream Resume ho gayi hai.")
-              st.rerun()
-            except Exception as e:
-              st.error(f"Error: {e}")
-
-        with b_col3:
-          if st.button("Stop 🛑", key=f"stop_{s['id']}"):
-            try:
-              os.kill(pid, signal.SIGKILL)
-              # Clean files
-              json_p = os.path.join(STREAMS_DIR, f"{s['id']}.json")
-              if os.path.exists(json_p):
-                os.remove(json_p)
-              if os.path.exists(s.get("concat_file", "")):
-                os.remove(s["concat_file"])
-              st.error("Stream Stop aur remove kar di gayi hai.")
-              st.rerun()
-            except Exception as e:
-              st.error(f"Error: {e}")
-
-        st.divider()
+    st.info("⚪ Live Status: Filhal koi stream active nahi hai.")
 
 # ---------------------------------------------------------
 # TAB 3: UPLOADED VIDEOS LIBRARY
 # ---------------------------------------------------------
 with tabs[2]:
-  st.subheader("📁 Uploaded Videos History & Details")
+  st.subheader("📁 Uploaded Videos History & File Details")
 
   files = [
       f for f in os.listdir(UPLOAD_DIR) if f.endswith((".mp4", ".mkv", ".mov"))
