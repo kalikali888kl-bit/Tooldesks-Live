@@ -76,7 +76,6 @@ def load_stream_info():
     except Exception:
       pass
 
-  # Fallback: Agar metadata file na ho lekin video exist karti ho
   if os.path.exists(VIDEO_FILE):
     duration = get_video_duration(VIDEO_FILE)
     start_epoch = os.path.getmtime(VIDEO_FILE)
@@ -166,6 +165,11 @@ if is_ffmpeg_running():
 
   if info:
     st.subheader("📊 Live Streaming Real-Time Status")
+
+    # Display Local Video Preview
+    if os.path.exists(VIDEO_FILE):
+      st.write("**📺 Active Video Preview:**")
+      st.video(VIDEO_FILE)
 
     start_epoch = info.get("start_epoch", time.time())
     duration = info.get("duration", 0.0)
