@@ -4,7 +4,6 @@ import subprocess
 import time
 from datetime import datetime
 import streamlit as st
-import streamlit.components.v1 as components
 
 st.set_page_config(
     page_title="24/7 Direct Upload Streamer", page_icon="🎥", layout="centered"
@@ -54,29 +53,11 @@ def get_video_duration(file_path):
     return 0.0
 
 
-def extract_youtube_embed(url):
-  """Extract YouTube video ID or stream embed link."""
-  if not url:
-    return None
-  url = url.strip()
-  if "v=" in url:
-    video_id = url.split("v=")[1].split("&")[0]
-    return f"https://www.youtube.com/embed/{video_id}?autoplay=1&mute=1"
-  elif "youtu.be/" in url:
-    video_id = url.split("youtu.be/")[1].split("?")[0]
-    return f"https://www.youtube.com/embed/{video_id}?autoplay=1&mute=1"
-  elif "live/" in url:
-    video_id = url.split("live/")[1].split("?")[0]
-    return f"https://www.youtube.com/embed/{video_id}?autoplay=1&mute=1"
-  return None
-
-
-def save_stream_info(filename, rtmp_url, yt_link, duration):
+def save_stream_info(filename, rtmp_url, duration):
   """Save metadata about current playing stream."""
   data = {
       "filename": filename,
       "rtmp_url": rtmp_url,
-      "yt_link": yt_link,
       "start_epoch": time.time(),
       "start_time_str": datetime.now().strftime("%I:%M %p (%d-%b-%Y)"),
       "duration": duration,
@@ -86,13 +67,27 @@ def save_stream_info(filename, rtmp_url, yt_link, duration):
 
 
 def load_stream_info():
-  """Load metadata of current active stream."""
+  """Load metadata with persistent fallback."""
   if os.path.exists(INFO_FILE):
     try:
       with open(INFO_FILE, "r") as f:
         return json.load(f)
     except Exception:
       pass
+
+  # Fallback Recovery agar info file delete bhi ho jaye
+  if os.path.exists(VIDEO_FILE):
+    duration = get_video_duration(VIDEO_FILE)
+    start_epoch = os.path.getmtime(VIDEO_FILE)
+    return {
+        "filename": "Uploaded_Video.mp4",
+        "rtmp_url": "rtmp://a.rtmp.youtube.com/live2",
+        "start_epoch": start_epoch,
+        "start_time_str": datetime.fromtimestamp(start_epoch).strftime(
+            "%I:%M %p (%d-%b-%Y)"
+        ),
+        "duration": duration,
+    }
   return None
 
 
@@ -108,7 +103,6 @@ def format_seconds(seconds):
 st.title("🎥 24/7 Live Streamer (Direct Upload)")
 st.write("Apni video direct computer se upload karein aur Live Stream chalayein!")
 
-# Inputs
 uploaded_file = st.file_uploader(
     "Apni Video File Select Karein (.mp4, .mkv)", type=["mp4", "mkv", "mov"]
 )
@@ -123,12 +117,6 @@ stream_key = st.text_input(
     "Stream Key",
     type="password",
     placeholder="xxxx-xxxx-xxxx-xxxx-xxxx",
-)
-
-yt_live_link = st.text_input(
-    "YouTube Live Video Link (Live Stream Player Ke Liye - Optional)",
-    placeholder="https://www.youtube.com/watch?v=abcdef12345",
-    help="Apni live stream ka public link yahan dalein taakay app par real-time live player chal sake.",
 )
 
 col1, col2 = st.columns(2)
@@ -148,9 +136,7 @@ with col1:
         f.write(uploaded_file.getbuffer())
 
       duration = get_video_duration(VIDEO_FILE)
-      save_stream_info(
-          uploaded_file.name, base_url, yt_live_link.strip(), duration
-      )
+      save_stream_info(uploaded_file.name, base_url, duration)
 
       cmd = f'ffmpeg -re -stream_loop -1 -i "{VIDEO_FILE}" -c:v libx264 -preset ultrafast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 50 -c:a aac -b:a 128k -ar 44100 -f flv "{full_stream_url}"'
 
@@ -167,7 +153,7 @@ with col2:
     else:
       st.info("Koi active stream nahi chal rahi.")
 
-# --- REAL-TIME LIVE PLAYER DASHBOARD ---
+# --- REAL-TIME LIVE TRACKER & PLAYER DASHBOARD ---
 st.divider()
 
 if is_ffmpeg_running():
@@ -175,23 +161,9 @@ if is_ffmpeg_running():
 
   info = load_stream_info()
 
-  st.subheader("🔴 Real-Time Live Broadcast Feed")
-
-  yt_link = info.get("yt_link", "") if info else ""
-  embed_url = extract_youtube_embed(yt_link)
-
-  if embed_url:
-    # YouTube Real-time Live Player Embed
-    components.iframe(embed_url, height=400, scrolling=False)
-  else:
-    st.info(
-        "💡 Tip: Agli baar 'YouTube Live Video Link' box mein apna live link"
-        " dalein, yahan live YouTube player auto-play hoga!"
-    )
-    if os.path.exists(VIDEO_FILE):
-      st.video(VIDEO_FILE)
-
   if info:
+    st.subheader("📊 Live Streaming Real-Time Status")
+
     start_epoch = info.get("start_epoch", time.time())
     duration = info.get("duration", 0.0)
     elapsed_total = time.time() - start_epoch
@@ -201,21 +173,37 @@ if is_ffmpeg_running():
       current_loop_pos = elapsed_total % duration
       progress_ratio = min(1.0, max(0.0, current_loop_pos / duration))
 
+      # Exact Live Synced Video Player
+      st.write(
+          f"**📺 Live Stream Player (Synced at"
+          f" {format_seconds(current_loop_pos)}):**"
+      )
+      st.video(
+          VIDEO_FILE,
+          start_time=int(current_loop_pos),
+          autoplay=True,
+          muted=True,
+      )
+
+      # Metrics Display
       m1, m2, m3 = st.columns(3)
       m1.metric("🔁 Repeat Count", f"{loop_count} baar")
       m2.metric(
-          "⏱ Video Position",
+          "⏱ Live Position",
           f"{format_seconds(current_loop_pos)} / {format_seconds(duration)}",
       )
       m3.metric("⏳ Total Stream Time", format_seconds(elapsed_total))
 
-      st.write(f"**Current Video Progress:** {int(progress_ratio * 100)}%")
+      st.write(f"**Current Loop Progress:** {int(progress_ratio * 100)}%")
       st.progress(progress_ratio)
+    else:
+      st.metric("⏳ Total Stream Time", format_seconds(elapsed_total))
 
     st.markdown(f"**📄 File Name:** `{info.get('filename', 'N/A')}`")
     st.markdown(f"**⏰ Start Time:** `{info.get('start_time_str', 'N/A')}`")
+    st.markdown(f"**📡 Target Server:** `{info.get('rtmp_url', 'N/A')}`")
 
-    if st.button("🔄 Dashboard Refresh Karein"):
+    if st.button("🔄 Sync & Refresh Live Player"):
       st.rerun()
 else:
   st.info("⚪ Live Status: Filhal koi stream active nahi hai.")
