@@ -11,6 +11,7 @@ st.set_page_config(
 
 INFO_FILE = "stream_info.json"
 VIDEO_FILE = "temp_video.mp4"
+LIVE_SNAP_FILE = "live_snapshot.jpg"
 
 
 def is_ffmpeg_running():
@@ -26,10 +27,9 @@ def stop_all_ffmpeg():
   """Kill all running ffmpeg processes and remove temp files."""
   try:
     subprocess.run(["pkill", "-9", "-f", "ffmpeg"])
-    if os.path.exists(VIDEO_FILE):
-      os.remove(VIDEO_FILE)
-    if os.path.exists(INFO_FILE):
-      os.remove(INFO_FILE)
+    for f in [VIDEO_FILE, INFO_FILE, LIVE_SNAP_FILE]:
+      if os.path.exists(f):
+        os.remove(f)
     return True
   except Exception:
     return False
@@ -52,6 +52,16 @@ def get_video_duration(file_path):
     return duration
   except Exception:
     return 0.0
+
+
+def capture_live_snapshot(current_pos):
+  """Capture current live frame using ffprobe/ffmpeg position."""
+  try:
+    cmd = f'ffmpeg -ss {current_pos} -i "{VIDEO_FILE}" -vframes 1 -q:v 2 "{LIVE_SNAP_FILE}" -y'
+    subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True
+  except Exception:
+    return False
 
 
 def save_stream_info(filename, rtmp_url, duration):
@@ -108,7 +118,6 @@ uploaded_file = st.file_uploader(
     "Apni Video File Select Karein (.mp4, .mkv)", type=["mp4", "mkv", "mov"]
 )
 
-# Alag Alag Inputs: Server URL aur Stream Key
 rtmp_url = st.text_input(
     "Stream URL (Server URL)",
     value="rtmp://a.rtmp.youtube.com/live2",
@@ -140,64 +149,4 @@ with col1:
       duration = get_video_duration(VIDEO_FILE)
       save_stream_info(uploaded_file.name, base_url, duration)
 
-      cmd = f'ffmpeg -re -stream_loop -1 -i "{VIDEO_FILE}" -c:v libx264 -preset ultrafast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 50 -c:a aac -b:a 128k -ar 44100 -f flv "{full_stream_url}"'
-
-      subprocess.Popen(cmd, shell=True)
-      st.success("🚀 Stream YouTube par bhej di gayi hai!")
-      st.rerun()
-
-with col2:
-  if st.button("Stop Streaming 🛑"):
-    if is_ffmpeg_running():
-      stop_all_ffmpeg()
-      st.warning("🛑 Live Stream mukammal roki gayi hai.")
-      st.rerun()
-    else:
-      st.info("Koi active stream nahi chal rahi.")
-
-# --- LIVE STREAM TRACKER DASHBOARD ---
-st.divider()
-
-if is_ffmpeg_running():
-  st.success("🟢 Live Status: Stream Active Hai!")
-
-  info = load_stream_info()
-
-  if info:
-    st.subheader("📊 Live Streaming Real-Time Status")
-
-    # Display Local Video Preview
-    if os.path.exists(VIDEO_FILE):
-      st.write("**📺 Active Video Preview:**")
-      st.video(VIDEO_FILE)
-
-    start_epoch = info.get("start_epoch", time.time())
-    duration = info.get("duration", 0.0)
-    elapsed_total = time.time() - start_epoch
-
-    if duration > 0:
-      loop_count = int(elapsed_total // duration) + 1
-      current_loop_pos = elapsed_total % duration
-      progress_ratio = min(1.0, max(0.0, current_loop_pos / duration))
-
-      m1, m2, m3 = st.columns(3)
-      m1.metric("🔁 Repeat Count", f"{loop_count} baar")
-      m2.metric(
-          "⏱ Video Position",
-          f"{format_seconds(current_loop_pos)} / {format_seconds(duration)}",
-      )
-      m3.metric("⏳ Total Stream Time", format_seconds(elapsed_total))
-
-      st.write(f"**Current Video Progress:** {int(progress_ratio * 100)}%")
-      st.progress(progress_ratio)
-    else:
-      st.metric("⏳ Total Stream Time", format_seconds(elapsed_total))
-
-    st.markdown(f"**📄 File Name:** `{info.get('filename', 'N/A')}`")
-    st.markdown(f"**⏰ Start Time:** `{info.get('start_time_str', 'N/A')}`")
-    st.markdown(f"**📡 Target Server:** `{info.get('rtmp_url', 'N/A')}`")
-
-    if st.button("🔄 Progress Refresh Karein"):
-      st.rerun()
-else:
-  st.info("⚪ Live Status: Filhal koi stream active nahi hai.")
+      cmd = f'ffmpeg -re -
