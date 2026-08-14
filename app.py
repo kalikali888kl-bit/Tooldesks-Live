@@ -149,4 +149,74 @@ with col1:
       duration = get_video_duration(VIDEO_FILE)
       save_stream_info(uploaded_file.name, base_url, duration)
 
-      cmd = f'ffmpeg -re -
+      cmd = f'ffmpeg -re -stream_loop -1 -i "{VIDEO_FILE}" -c:v libx264 -preset ultrafast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 50 -c:a aac -b:a 128k -ar 44100 -f flv "{full_stream_url}"'
+
+      subprocess.Popen(cmd, shell=True)
+      st.success("🚀 Stream YouTube par bhej di gayi hai!")
+      st.rerun()
+
+with col2:
+  if st.button("Stop Streaming 🛑"):
+    if is_ffmpeg_running():
+      stop_all_ffmpeg()
+      st.warning("🛑 Live Stream mukammal roki gayi hai.")
+      st.rerun()
+    else:
+      st.info("Koi active stream nahi chal rahi.")
+
+# --- LIVE STREAM TRACKER DASHBOARD ---
+st.divider()
+
+if is_ffmpeg_running():
+  st.success("🟢 Live Status: Stream Active Hai!")
+
+  info = load_stream_info()
+
+  if info:
+    st.subheader("📊 Real-Time Live Stream Tracker")
+
+    start_epoch = info.get("start_epoch", time.time())
+    duration = info.get("duration", 0.0)
+    elapsed_total = time.time() - start_epoch
+
+    if duration > 0:
+      loop_count = int(elapsed_total // duration) + 1
+      current_loop_pos = elapsed_total % duration
+      progress_ratio = min(1.0, max(0.0, current_loop_pos / duration))
+
+      # Live Snapshot Capture
+      capture_live_snapshot(int(current_loop_pos))
+
+      col_img, col_stats = st.columns([1, 1])
+
+      with col_img:
+        if os.path.exists(LIVE_SNAP_FILE):
+          st.image(
+              LIVE_SNAP_FILE,
+              caption=f"🔴 Current Live Frame (Position: {format_seconds(current_loop_pos)})",
+              use_container_width=True,
+          )
+        elif os.path.exists(VIDEO_FILE):
+          st.video(VIDEO_FILE)
+
+      with col_stats:
+        st.metric("🔁 Repeat Count", f"{loop_count} baar")
+        st.metric(
+            "⏱ Current Live Position",
+            f"{format_seconds(current_loop_pos)} / {format_seconds(duration)}",
+        )
+        st.metric("⏳ Total Stream Time", format_seconds(elapsed_total))
+
+      st.write(f"**Current Video Progress:** {int(progress_ratio * 100)}%")
+      st.progress(progress_ratio)
+    else:
+      st.metric("⏳ Total Stream Time", format_seconds(elapsed_total))
+
+    st.markdown(f"**📄 File Name:** `{info.get('filename', 'N/A')}`")
+    st.markdown(f"**⏰ Start Time:** `{info.get('start_time_str', 'N/A')}`")
+    st.markdown(f"**📡 Target Server:** `{info.get('rtmp_url', 'N/A')}`")
+
+    if st.button("🔄 Real-Time Live Frame Refresh Karein"):
+      st.rerun()
+else:
+  st.info("⚪ Live Status: Filhal koi stream active nahi hai.")
