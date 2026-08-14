@@ -7,15 +7,16 @@ from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
 
-# Page Configuration
+# Page Config
 st.set_page_config(
     page_title="24/7 Live Streamer Pro", page_icon="🎥", layout="wide"
 )
 
-# Folder Paths
-UPLOAD_DIR = os.path.abspath("uploads")
-INFO_FILE = os.path.abspath("stream_info.json")
-PLAYLIST_FILE = os.path.abspath("playlist.txt")
+# File Paths
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+INFO_FILE = os.path.join(BASE_DIR, "stream_info.json")
+PLAYLIST_FILE = os.path.join(BASE_DIR, "playlist.txt")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -44,69 +45,45 @@ st.markdown(
 )
 
 
-# --- RELIABLE PROCESS & STREAM HELPERS ---
-def load_stream_info():
-  """Load metadata of running stream."""
-  if os.path.exists(INFO_FILE):
-    try:
-      with open(INFO_FILE, "r") as f:
-        return json.load(f)
-    except Exception:
-      pass
+# --- OS LEVEL PROCESS & STREAM HELPERS ---
+def get_active_ffmpeg_pid():
+  """Find active FFmpeg PID directly from Linux OS process table."""
+  try:
+    cmd = "ps aux | grep '[f]fmpeg'"
+    output = subprocess.check_output(cmd, shell=True).decode().strip()
+    if output:
+      pid = int(output.split()[1])
+      return pid
+  except Exception:
+    pass
   return None
 
 
-def save_stream_info(data):
-  """Save metadata to JSON."""
-  with open(INFO_FILE, "w") as f:
-    json.dump(data, f)
-
-
 def is_stream_active():
-  """Check via Process ID (PID) if FFmpeg process is alive."""
-  info = load_stream_info()
-  if not info or "pid" not in info:
-    return False
-  pid = info["pid"]
-  try:
-    os.kill(pid, 0)  # Check if process exists
-    return True
-  except (OSError, ProcessLookupError):
-    return False
+  """Check directly via OS if stream is live."""
+  return get_active_ffmpeg_pid() is not None
 
 
 def get_stream_state():
   """Check Linux process state (Running/Paused/Stopped)."""
-  info = load_stream_info()
-  if not info or "pid" not in info:
+  pid = get_active_ffmpeg_pid()
+  if not pid:
     return "Stopped ⏹"
-  pid = info["pid"]
   try:
-    os.kill(pid, 0)
-    try:
-      with open(f"/proc/{pid}/status", "r") as f:
-        for line in f:
-          if line.startswith("State:"):
-            state = line.split(":")[1].strip().split()[0]
-            if state in ["T", "t"]:
-              return "Paused ⏸"
-            return "Running 🟢"
-    except Exception:
-      return "Running 🟢"
-  except (OSError, ProcessLookupError):
-    return "Stopped ⏹"
+    with open(f"/proc/{pid}/status", "r") as f:
+      for line in f:
+        if line.startswith("State:"):
+          state = line.split(":")[1].strip().split()[0]
+          if state in ["T", "t"]:
+            return "Paused ⏸"
+          return "Running 🟢"
+  except Exception:
+    pass
+  return "Running 🟢"
 
 
 def stop_stream():
-  """Kill stream process and remove tracking files."""
-  info = load_stream_info()
-  if info and "pid" in info:
-    try:
-      os.kill(info["pid"], signal.SIGKILL)
-    except Exception:
-      pass
-
-  # Backup pkill fallback
+  """Kill active stream process and clean tracking files."""
   try:
     subprocess.run(["pkill", "-9", "-f", "ffmpeg"])
   except Exception:
@@ -121,10 +98,10 @@ def stop_stream():
 
 
 def pause_stream():
-  info = load_stream_info()
-  if info and "pid" in info:
+  pid = get_active_ffmpeg_pid()
+  if pid:
     try:
-      os.kill(info["pid"], signal.SIGSTOP)
+      os.kill(pid, signal.SIGSTOP)
       return True
     except Exception:
       pass
@@ -132,10 +109,10 @@ def pause_stream():
 
 
 def resume_stream():
-  info = load_stream_info()
-  if info and "pid" in info:
+  pid = get_active_ffmpeg_pid()
+  if pid:
     try:
-      os.kill(info["pid"], signal.SIGCONT)
+      os.kill(pid, signal.SIGCONT)
       return True
     except Exception:
       pass
@@ -170,6 +147,41 @@ def format_seconds(seconds):
   return f"{m:02d}m {s:02d}s"
 
 
+def save_stream_info(data):
+  with open(INFO_FILE, "w") as f:
+    json.dump(data, f)
+
+
+def load_stream_info():
+  if os.path.exists(INFO_FILE):
+    try:
+      with open(INFO_FILE, "r") as f:
+        return json.load(f)
+    except Exception:
+      pass
+
+  # Auto Recovery Fallback
+  uploaded_files = [
+      f for f in os.listdir(UPLOAD_DIR) if f.endswith((".mp4", ".mkv", ".mov"))
+  ]
+  if uploaded_files:
+    first_file = os.path.join(UPLOAD_DIR, uploaded_files[0])
+    duration = get_video_duration(first_file)
+    start_time = os.path.getmtime(first_file)
+    return {
+        "videos": uploaded_files,
+        "main_file": first_file,
+        "start_epoch": start_time,
+        "start_time_str": datetime.fromtimestamp(start_time).strftime(
+            "%I:%M %p (%d-%b-%Y)"
+        ),
+        "end_time_str": "Continuous 24/7",
+        "total_duration": duration,
+        "rtmp_url": "rtmp://a.rtmp.youtube.com/live2",
+    }
+  return None
+
+
 # --- MAIN INTERFACE ---
 st.title("🎥 24/7 Live Streamer Pro Dashboard")
 
@@ -185,7 +197,6 @@ tabs = st.tabs([
 with tabs[0]:
   st.subheader("1️⃣ Videos Upload & Selection (Up to 10 Videos)")
 
-  # File Uploader
   new_uploads = st.file_uploader(
       "Nayi Video Files Upload Karein",
       type=["mp4", "mkv", "mov"],
@@ -195,10 +206,10 @@ with tabs[0]:
   if new_uploads:
     for uploaded_file in new_uploads:
       save_path = os.path.join(UPLOAD_DIR, uploaded_file.name)
-      if not os.path.exists(save_path):
-        with open(save_path, "wb") as f:
-          f.write(uploaded_file.getbuffer())
+      with open(save_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
     st.success("Uploaded files library mein save ho gayi hain!")
+    st.rerun()
 
   existing_files = [
       f for f in os.listdir(UPLOAD_DIR) if f.endswith((".mp4", ".mkv", ".mov"))
@@ -210,6 +221,7 @@ with tabs[0]:
     selected_videos = st.multiselect(
         "Library Se Videos Select Karein (Max 10)",
         options=existing_files,
+        default=existing_files[:1],
         max_selections=10,
     )
 
@@ -229,7 +241,6 @@ with tabs[0]:
           st.markdown(f"**🎬 Video {idx+1}:** `{vid_name}`")
           st.caption(f"Duration: {format_seconds(duration)}")
 
-          # Quick Video Player Preview
           st.video(vid_path)
 
           loop_count = st.number_input(
@@ -281,7 +292,6 @@ with tabs[0]:
           placeholder="xxxx-xxxx-xxxx-xxxx-xxxx",
       )
 
-      # Stream Control Buttons
       c_start, c_pause, c_resume, c_stop = st.columns(4)
 
       with c_start:
@@ -291,7 +301,6 @@ with tabs[0]:
           else:
             stop_stream()
 
-            # Create Concat Playlist File
             with open(PLAYLIST_FILE, "w") as f:
               for item in video_loop_config:
                 abs_p = os.path.abspath(item["path"])
@@ -304,10 +313,9 @@ with tabs[0]:
 
             cmd = f'ffmpeg -re -stream_loop -1 -f concat -safe 0 -i "{PLAYLIST_FILE}" -c:v libx264 -preset ultrafast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 50 -c:a aac -b:a 128k -ar 44100 -f flv "{full_stream_url}"'
 
-            process = subprocess.Popen(cmd, shell=True)
+            subprocess.Popen(cmd, shell=True)
 
             save_stream_info({
-                "pid": process.pid,
                 "videos": [v["name"] for v in video_loop_config],
                 "main_file": os.path.abspath(video_loop_config[0]["path"]),
                 "start_epoch": time.time(),
@@ -353,7 +361,7 @@ with tabs[1]:
     if info:
       start_epoch = info.get("start_epoch", time.time())
       duration = info.get("total_duration", 1.0)
-      elapsed_total = time.time() - start_epoch
+      elapsed_total = max(0.0, time.time() - start_epoch)
 
       loop_count = int(elapsed_total // duration) + 1 if duration > 0 else 1
       current_pos = elapsed_total % duration if duration > 0 else 0
@@ -361,11 +369,11 @@ with tabs[1]:
           min(1.0, max(0.0, current_pos / duration)) if duration > 0 else 0.0
       )
 
-      # 1. Live Synced Video Player
+      # Live Synced Player
       main_video_file = info.get("main_file", "")
       if main_video_file and os.path.exists(main_video_file):
         st.write(
-            f"**📺 Live Synced Player (Current Position:"
+            f"**📺 Live Synced Player (Position:"
             f" {format_seconds(current_pos)}):**"
         )
         st.video(
@@ -375,7 +383,6 @@ with tabs[1]:
             muted=True,
         )
 
-      # 2. Metrics Display
       m1, m2, m3, m4 = st.columns(4)
       m1.metric("🔁 Sequence Loop Count", f"{loop_count} baar")
       m2.metric(
@@ -388,7 +395,6 @@ with tabs[1]:
       st.write(f"**Current Sequence Progress:** {int(progress_ratio * 100)}%")
       st.progress(progress_ratio)
 
-      # Details
       st.markdown(
           f"**🎬 Selected Videos:** `{', '.join(info.get('videos', []))}`"
       )
