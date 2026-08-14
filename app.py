@@ -68,13 +68,27 @@ def save_stream_info(filename, rtmp_url, duration):
 
 
 def load_stream_info():
-  """Load metadata of current active stream."""
+  """Load metadata with auto-fallback recovery."""
   if os.path.exists(INFO_FILE):
     try:
       with open(INFO_FILE, "r") as f:
         return json.load(f)
     except Exception:
-      return None
+      pass
+
+  # Fallback: Agar metadata file na ho lekin video exist karti ho
+  if os.path.exists(VIDEO_FILE):
+    duration = get_video_duration(VIDEO_FILE)
+    start_epoch = os.path.getmtime(VIDEO_FILE)
+    return {
+        "filename": "Uploaded_Video.mp4",
+        "rtmp_url": "rtmp://a.rtmp.youtube.com/live2",
+        "start_epoch": start_epoch,
+        "start_time_str": datetime.fromtimestamp(start_epoch).strftime(
+            "%I:%M %p (%d-%b-%Y)"
+        ),
+        "duration": duration,
+    }
   return None
 
 
@@ -115,24 +129,18 @@ with col1:
     if not uploaded_file or not stream_key or not rtmp_url:
       st.error("Tamam fields fill karna aur Video upload karna zaroori hai!")
     else:
-      # Stop existing stream
       stop_all_ffmpeg()
 
       base_url = rtmp_url.strip().rstrip("/")
       clean_key = stream_key.strip()
       full_stream_url = f"{base_url}/{clean_key}"
 
-      # Save video file
       with open(VIDEO_FILE, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-      # Calculate duration using ffprobe
       duration = get_video_duration(VIDEO_FILE)
-
-      # Save metadata info with exact start timestamp
       save_stream_info(uploaded_file.name, base_url, duration)
 
-      # Continuous Loop FFmpeg Command
       cmd = f'ffmpeg -re -stream_loop -1 -i "{VIDEO_FILE}" -c:v libx264 -preset ultrafast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 50 -c:a aac -b:a 128k -ar 44100 -f flv "{full_stream_url}"'
 
       subprocess.Popen(cmd, shell=True)
@@ -159,10 +167,8 @@ if is_ffmpeg_running():
   if info:
     st.subheader("📊 Live Streaming Real-Time Status")
 
-    # Time Calculations
     start_epoch = info.get("start_epoch", time.time())
     duration = info.get("duration", 0.0)
-
     elapsed_total = time.time() - start_epoch
 
     if duration > 0:
@@ -170,23 +176,21 @@ if is_ffmpeg_running():
       current_loop_pos = elapsed_total % duration
       progress_ratio = min(1.0, max(0.0, current_loop_pos / duration))
 
-      # Metrics Display
       m1, m2, m3 = st.columns(3)
-      m1.metric("🔁 Video Repeat Count", f"{loop_count} baar")
+      m1.metric("🔁 Repeat Count", f"{loop_count} baar")
       m2.metric(
           "⏱ Video Position",
           f"{format_seconds(current_loop_pos)} / {format_seconds(duration)}",
       )
       m3.metric("⏳ Total Stream Time", format_seconds(elapsed_total))
 
-      # Progress Bar
       st.write(f"**Current Video Progress:** {int(progress_ratio * 100)}%")
       st.progress(progress_ratio)
     else:
-      st.metric("⏳ Total Stream Uptime", format_seconds(elapsed_total))
+      st.metric("⏳ Total Stream Time", format_seconds(elapsed_total))
 
     st.markdown(f"**📄 File Name:** `{info.get('filename', 'N/A')}`")
-    st.markdown(f"**⏰ Shuru Hone Ka Waqt:** `{info.get('start_time_str', 'N/A')}`")
+    st.markdown(f"**⏰ Start Time:** `{info.get('start_time_str', 'N/A')}`")
     st.markdown(f"**📡 Target Server:** `{info.get('rtmp_url', 'N/A')}`")
 
     if st.button("🔄 Progress Refresh Karein"):
